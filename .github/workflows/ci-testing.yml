@@ -1,21 +1,21 @@
-name: CI Testing & Build
+name: CI Testing and Build
 
 on:
   push:
-    branches:
-      - testing
+    branches: [ "main" ]
   pull_request:
+    branches: [ "main" ]
 
 jobs:
   build_and_push:
     runs-on: ubuntu-latest
+
     services:
       postgres:
-        image: postgres:13
+        image: postgres:14
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: customers
         ports:
           - 5432:5432
         options: >-
@@ -25,86 +25,97 @@ jobs:
           --health-retries=5
 
     steps:
-      # ---------- CHECKOUT ----------
+      # Checkout repo
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      # ---------- PYTHON SETUP ----------
+      # Set up Python
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'   # ✅ FIXED
+          python-version: "3.10"
 
+      # Install dependencies for backend
       - name: Install dependencies for backend
         run: |
           python -m pip install --upgrade pip
           pip install pytest pytest-asyncio psycopg2-binary fastapi uvicorn httpx sqlalchemy
+          pip install "pydantic[email]"   # ✅ Fix EmailStr dependency
 
+      # Wait for Postgres to be ready
       - name: Wait for Postgres to be ready
         run: |
-          for i in {1..10}; do
-            if pg_isready -h localhost -p 5432 -U postgres; then
-              echo "Postgres is ready!"
-              break
-            fi
+          until pg_isready -h localhost -p 5432 -U postgres; do
             echo "Waiting for Postgres..."
             sleep 5
           done
 
+      # Create test databases
       - name: Create test databases
         run: |
-          psql -h localhost -U postgres -c "CREATE DATABASE customers;" || true
-          psql -h localhost -U postgres -c "CREATE DATABASE orders;" || true
-          psql -h localhost -U postgres -c "CREATE DATABASE products;" || true
+          psql -h localhost -U postgres -c "CREATE DATABASE customers;"
+          psql -h localhost -U postgres -c "CREATE DATABASE orders;"
+          psql -h localhost -U postgres -c "CREATE DATABASE products;"
         env:
           PGPASSWORD: postgres
 
-      # ---------- BACKEND TESTS ----------
+      # Run Customer Service tests
       - name: Run Customer Service tests
         run: pytest backend/customer_service/tests --maxfail=1 --disable-warnings -q
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/customers
 
+      # Run Order Service tests
       - name: Run Order Service tests
         run: pytest backend/order_service/tests --maxfail=1 --disable-warnings -q
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/orders
 
+      # Run Product Service tests
       - name: Run Product Service tests
         run: pytest backend/product_service/tests --maxfail=1 --disable-warnings -q
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/products
 
-      # ---------- FRONTEND ----------
+      # Set up Node.js for frontend
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v3
         with:
-          node-version: '20'
+          node-version: "20"
 
+      # Install & Test frontend
       - name: Install & Test frontend
-        working-directory: ./frontend
         run: |
+          cd frontend
           if [ -f package.json ]; then
             npm install
             npm run build || true
           else
-            echo "⚠️ No package.json found in frontend/, skipping npm build."
+            echo "⚠️ No package.json found, skipping frontend build"
           fi
 
-      # ---------- DOCKER LOGIN ----------
+      # Azure Login
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
+      # ACR Login
       - name: ACR Login
         run: az acr login --name ${{ secrets.ACR_NAME }}
 
-      # ---------- DOCKER BUILD & PUSH ----------
+      # Build Docker images
       - name: Build Docker images
         run: |
-          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/customer_service:latest ./backend/customer_service
-          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/order_service:latest ./backend/order_service
-          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/product_service:latest ./backend/product_service
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/customer-service:latest ./backend/customer_service
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/order-service:latest ./backend/order_service
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/product-service:latest ./backend/product_service
           docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/frontend:latest ./frontend
 
+      # Push Docker images
       - name: Push Docker images
         run: |
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/customer_service:latest
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/order_service:latest
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/product_service:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/customer-service:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/order-service:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/product-service:latest
           docker push ${{ secrets.ACR_NAME }}.azurecr.io/frontend:latest
