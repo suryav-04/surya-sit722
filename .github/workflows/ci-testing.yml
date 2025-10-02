@@ -10,8 +10,22 @@ jobs:
   build_and_push:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
-      # Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
@@ -27,7 +41,7 @@ jobs:
         run: echo "Skipping npm install for frontend (no package.json found, static frontend only)."
 
       # ---------------------------
-      # BACKEND - Install Dependencies
+      # BACKEND
       # ---------------------------
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -42,20 +56,34 @@ jobs:
           pip install -r backend/order_service/requirements.txt
           pip install -r backend/product_service/requirements.txt
 
+      - name: Wait for Postgres to be ready
+        run: |
+          for i in {1..10}; do
+            nc -z localhost 5432 && echo "Postgres is up!" && break
+            echo "Waiting for Postgres..."
+            sleep 3
+          done
+
       # ---------------------------
-      # BACKEND - Run Tests
+      # BACKEND TESTS
       # ---------------------------
       - name: Run Customer Service tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
         run: python -m pytest backend/customer_service/tests --maxfail=1 --disable-warnings -q
 
       - name: Run Order Service tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
         run: python -m pytest backend/order_service/tests --maxfail=1 --disable-warnings -q
 
       - name: Run Product Service tests
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
         run: python -m pytest backend/product_service/tests --maxfail=1 --disable-warnings -q
 
       # ---------------------------
-      # (OPTIONAL) DOCKER BUILD STAGE
+      # DOCKER BUILD
       # ---------------------------
       - name: Build Docker images
         run: |
