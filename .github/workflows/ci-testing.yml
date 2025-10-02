@@ -39,10 +39,13 @@ jobs:
       - name: Install dependencies for backend
         run: |
           python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio psycopg2-binary fastapi uvicorn httpx sqlalchemy
-          pip install "pydantic[email]"   # ✅ Fix EmailStr dependency
+          pip install -r backend/customer_service/requirements.txt || true
+          pip install -r backend/order_service/requirements.txt || true
+          pip install -r backend/product_service/requirements.txt || true
+          pip install pytest pytest-asyncio
+          pip install "pydantic[email]"
 
-      # Wait for Postgres to be ready
+      # Wait for Postgres
       - name: Wait for Postgres to be ready
         run: |
           until pg_isready -h localhost -p 5432 -U postgres; do
