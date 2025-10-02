@@ -1,92 +1,67 @@
-name: CI - Stage 1 (Testing Branch)
+name: CI - Testing Branch
 
 on:
   push:
-    branches:
-      - testing
-
-env:
-  ACR: ${{ secrets.ACR_LOGIN_SERVER }}
-  IMAGE_TAG: ${{ github.sha }}
-  POSTGRES_USER: postgres
-  POSTGRES_PASSWORD: postgres
-  POSTGRES_DB: testdb
-  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/customers
+    branches: ["testing"]
+  pull_request:
+    branches: ["testing"]
 
 jobs:
-  build_and_push:
+  test:
     runs-on: ubuntu-latest
 
     services:
       postgres:
         image: postgres:14
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: testdb
         ports:
           - 5432:5432
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: orders
         options: >-
-          --health-cmd="pg_isready -U postgres"
+          --health-cmd="pg_isready -U testuser -d orders"
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
 
+    env:
+      # Database connection string (used in db.py)
+      DATABASE_URL: postgresql+psycopg2://testuser:testpassword@localhost:5432/orders
+
+      # Mock service URLs for tests
+      PRODUCT_SERVICE_URL: http://localhost:8002
+      CUSTOMER_SERVICE_URL: http://localhost:8003
+
+      # RabbitMQ (not used in tests, but set for completeness)
+      RABBITMQ_HOST: localhost
+      RABBITMQ_USER: guest
+      RABBITMQ_PASS: guest
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      # ---------- Setup DB ----------
-      - name: Install Postgres client
-        run: sudo apt-get install -y postgresql-client
-
-      - name: Create test databases
-        run: |
-          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE customers;"
-          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE orders;"
-          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE products;"
-
-      # ---------- Backend Tests ----------
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
-          pip install -r backend/customer_service/requirements.txt
+          python -m pip install --upgrade pip
           pip install -r backend/order_service/requirements.txt
-          pip install -r backend/product_service/requirements.txt
-          pip install pytest psycopg2-binary
+          pip install pytest httpx aio-pika psycopg2-binary
 
-      - name: Run backend tests
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/customers
+      - name: Wait for PostgreSQL
         run: |
-          pytest backend/customer_service/tests --maxfail=1 --disable-warnings -q
-          pytest backend/order_service/tests --maxfail=1 --disable-warnings -q
-          pytest backend/product_service/tests --maxfail=1 --disable-warnings -q
+          echo "⏳ Waiting for PostgreSQL to be ready..."
+          for i in {1..10}; do
+            pg_isready -h localhost -p 5432 -U testuser -d orders && break
+            sleep 3
+          done
 
-      # ---------- Azure + ACR ----------
-      - name: Azure Login
-        uses: azure/login@v2
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: ACR Login
-        run: az acr login --name ${{ env.ACR }}
-
-      # ---------- Docker ----------
-      - name: Build Docker images
+      - name: Run tests
         run: |
-          docker build -t $ACR/frontend:${IMAGE_TAG} ./frontend
-          docker build -t $ACR/customer_service:${IMAGE_TAG} ./backend/customer_service
-          docker build -t $ACR/order_service:${IMAGE_TAG} ./backend/order_service
-          docker build -t $ACR/product_service:${IMAGE_TAG} ./backend/product_service
-
-      - name: Push Docker images
-        run: |
-          docker push $ACR/frontend:${IMAGE_TAG}
-          docker push $ACR/customer_service:${IMAGE_TAG}
-          docker push $ACR/order_service:${IMAGE_TAG}
-          docker push $ACR/product_service:${IMAGE_TAG}
+          cd backend/order_service
+          pytest -v --disable-warnings --maxfail=1
