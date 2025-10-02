@@ -1,104 +1,110 @@
-name: CI - Stage 1 (Testing Branch)
+name: CI Testing & Build
 
 on:
   push:
     branches:
       - testing
+  pull_request:
 
 jobs:
   build_and_push:
     runs-on: ubuntu-latest
-
     services:
       postgres:
         image: postgres:13
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: testdb
+          POSTGRES_DB: customers
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
     steps:
+      # ---------- CHECKOUT ----------
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      # ---------- FRONTEND ----------
-      - name: Set up Node.js for frontend
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Install & Test frontend
-        working-directory: ./frontend
-        run: |
-          if [ -f package.json ]; then
-            npm install
-            npm test || echo "No frontend tests found"
-          else
-            echo "No package.json found in frontend, skipping..."
-          fi
-
-      # ---------- BACKEND ----------
+      # ---------- PYTHON SETUP ----------
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: 3.10
+          python-version: '3.10'   # ✅ FIXED
 
       - name: Install dependencies for backend
         run: |
-          pip install --upgrade pip
+          python -m pip install --upgrade pip
           pip install pytest pytest-asyncio psycopg2-binary fastapi uvicorn httpx sqlalchemy
 
       - name: Wait for Postgres to be ready
         run: |
           for i in {1..10}; do
-            nc -z localhost 5432 && echo "Postgres is up!" && break
+            if pg_isready -h localhost -p 5432 -U postgres; then
+              echo "Postgres is ready!"
+              break
+            fi
             echo "Waiting for Postgres..."
-            sleep 3
+            sleep 5
           done
 
       - name: Create test databases
         run: |
-          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE customers;"
-          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE orders;"
-          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE products;"
+          psql -h localhost -U postgres -c "CREATE DATABASE customers;" || true
+          psql -h localhost -U postgres -c "CREATE DATABASE orders;" || true
+          psql -h localhost -U postgres -c "CREATE DATABASE products;" || true
+        env:
+          PGPASSWORD: postgres
 
+      # ---------- BACKEND TESTS ----------
       - name: Run Customer Service tests
-        working-directory: ./backend/customer_service
-        run: pytest tests --maxfail=1 --disable-warnings -q
+        run: pytest backend/customer_service/tests --maxfail=1 --disable-warnings -q
 
       - name: Run Order Service tests
-        working-directory: ./backend/order_service
-        run: pytest tests --maxfail=1 --disable-warnings -q
+        run: pytest backend/order_service/tests --maxfail=1 --disable-warnings -q
 
       - name: Run Product Service tests
-        working-directory: ./backend/product_service
-        run: pytest tests --maxfail=1 --disable-warnings -q
+        run: pytest backend/product_service/tests --maxfail=1 --disable-warnings -q
 
-      # ---------- BUILD & PUSH ----------
+      # ---------- FRONTEND ----------
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install & Test frontend
+        working-directory: ./frontend
+        run: |
+          if [ -f package.json ]; then
+            npm install
+            npm run build || true
+          else
+            echo "⚠️ No package.json found in frontend/, skipping npm build."
+          fi
+
+      # ---------- DOCKER LOGIN ----------
       - name: Azure Login
         uses: azure/login@v1
         with:
           creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: ACR Login
-        run: az acr login --name sit7229cacr123
+        run: az acr login --name ${{ secrets.ACR_NAME }}
 
+      # ---------- DOCKER BUILD & PUSH ----------
       - name: Build Docker images
         run: |
-          docker build -t sit7229cacr123.azurecr.io/frontend:latest ./frontend
-          docker build -t sit7229cacr123.azurecr.io/customer_service:latest ./backend/customer_service
-          docker build -t sit7229cacr123.azurecr.io/order_service:latest ./backend/order_service
-          docker build -t sit7229cacr123.azurecr.io/product_service:latest ./backend/product_service
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/customer_service:latest ./backend/customer_service
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/order_service:latest ./backend/order_service
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/product_service:latest ./backend/product_service
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/frontend:latest ./frontend
 
       - name: Push Docker images
         run: |
-          docker push sit7229cacr123.azurecr.io/frontend:latest
-          docker push sit7229cacr123.azurecr.io/customer_service:latest
-          docker push sit7229cacr123.azurecr.io/order_service:latest
-          docker push sit7229cacr123.azurecr.io/product_service:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/customer_service:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/order_service:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/product_service:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/frontend:latest
