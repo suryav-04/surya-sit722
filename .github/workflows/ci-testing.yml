@@ -1,67 +1,102 @@
-name: CI - Testing Branch
+name: CI - Build and Push
 
 on:
   push:
-    branches: ["testing"]
+    branches:
+      - testing
   pull_request:
-    branches: ["testing"]
+    branches:
+      - testing
 
 jobs:
-  test:
+  build_and_push:
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:14
-        ports:
-          - 5432:5432
-        env:
-          POSTGRES_USER: testuser
-          POSTGRES_PASSWORD: testpassword
-          POSTGRES_DB: orders
-        options: >-
-          --health-cmd="pg_isready -U testuser -d orders"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=5
-
-    env:
-      # Database connection string (used in db.py)
-      DATABASE_URL: postgresql+psycopg2://testuser:testpassword@localhost:5432/orders
-
-      # Mock service URLs for tests
-      PRODUCT_SERVICE_URL: http://localhost:8002
-      CUSTOMER_SERVICE_URL: http://localhost:8003
-
-      # RabbitMQ (not used in tests, but set for completeness)
-      RABBITMQ_HOST: localhost
-      RABBITMQ_USER: guest
-      RABBITMQ_PASS: guest
-
     steps:
+      # -------------------------
+      # Checkout repository
+      # -------------------------
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
+      # -------------------------
+      # Setup Node.js for frontend
+      # -------------------------
+      - name: Set up Node.js for frontend
+        uses: actions/setup-node@v4
         with:
-          python-version: "3.10"
+          node-version: 20
 
-      - name: Install dependencies
+      - name: Install & Test frontend
+        working-directory: ./frontend
         run: |
-          python -m pip install --upgrade pip
-          pip install -r backend/order_service/requirements.txt
-          pip install pytest httpx aio-pika psycopg2-binary
+          npm install
+          echo "✅ Frontend dependencies installed successfully"
 
-      - name: Wait for PostgreSQL
+      # -------------------------
+      # Setup Python for backend
+      # -------------------------
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies for backend
         run: |
-          echo "⏳ Waiting for PostgreSQL to be ready..."
-          for i in {1..10}; do
-            pg_isready -h localhost -p 5432 -U testuser -d orders && break
-            sleep 3
-          done
+          pip install --upgrade pip
+          pip install pytest httpx sqlalchemy psycopg2-binary fastapi uvicorn
 
-      - name: Run tests
+      # -------------------------
+      # Run backend tests
+      # -------------------------
+      - name: Run Customer Service tests
+        run: |
+          cd backend/customer_service
+          pip install -r requirements.txt
+          pytest -q --disable-warnings --maxfail=1
+
+      - name: Run Order Service tests
         run: |
           cd backend/order_service
-          pytest -v --disable-warnings --maxfail=1
+          pip install -r requirements.txt
+          pytest -q --disable-warnings --maxfail=1
+
+      - name: Run Product Service tests
+        run: |
+          cd backend/product_service
+          pip install -r requirements.txt
+          pytest -q --disable-warnings --maxfail=1
+
+      # -------------------------
+      # Azure Login
+      # -------------------------
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # -------------------------
+      # ACR Login
+      # -------------------------
+      - name: ACR Login
+        run: az acr login --name ${{ secrets.ACR_NAME }}
+
+      # -------------------------
+      # Build Docker Images
+      # -------------------------
+      - name: Build Docker images
+        run: |
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/frontend:latest ./frontend
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/customer_service:latest ./backend/customer_service
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/order_service:latest ./backend/order_service
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/product_service:latest ./backend/product_service
+
+      # -------------------------
+      # Push Docker Images
+      # -------------------------
+      - name: Push Docker images
+        run: |
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/frontend:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/customer_service:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/order_service:latest
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/product_service:latest
