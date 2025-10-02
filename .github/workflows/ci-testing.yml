@@ -3,12 +3,15 @@ name: CI - Stage 1 (Testing Branch)
 on:
   push:
     branches:
-      - testing   # Trigger only on testing branch
+      - testing
 
 env:
   ACR: ${{ secrets.ACR_LOGIN_SERVER }}
   IMAGE_TAG: ${{ github.sha }}
-  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
+  POSTGRES_USER: postgres
+  POSTGRES_PASSWORD: postgres
+  POSTGRES_DB: testdb
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/customers
 
 jobs:
   build_and_push:
@@ -30,17 +33,26 @@ jobs:
           --health-retries=5
 
     steps:
-      # Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------- Backend Tests (Python + pytest) ----------
+      # ---------- Setup DB ----------
+      - name: Install Postgres client
+        run: sudo apt-get install -y postgresql-client
+
+      - name: Create test databases
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE customers;"
+          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE orders;"
+          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE products;"
+
+      # ---------- Backend Tests ----------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: Install dependencies for backend
+      - name: Install dependencies
         run: |
           pip install -r backend/customer_service/requirements.txt
           pip install -r backend/order_service/requirements.txt
@@ -49,13 +61,13 @@ jobs:
 
       - name: Run backend tests
         env:
-          DATABASE_URL: ${{ env.DATABASE_URL }}
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/customers
         run: |
           pytest backend/customer_service/tests --maxfail=1 --disable-warnings -q
           pytest backend/order_service/tests --maxfail=1 --disable-warnings -q
           pytest backend/product_service/tests --maxfail=1 --disable-warnings -q
 
-      # ---------- Azure & ACR ----------
+      # ---------- Azure + ACR ----------
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -64,7 +76,7 @@ jobs:
       - name: ACR Login
         run: az acr login --name ${{ env.ACR }}
 
-      # ---------- Docker Build ----------
+      # ---------- Docker ----------
       - name: Build Docker images
         run: |
           docker build -t $ACR/frontend:${IMAGE_TAG} ./frontend
@@ -72,7 +84,6 @@ jobs:
           docker build -t $ACR/order_service:${IMAGE_TAG} ./backend/order_service
           docker build -t $ACR/product_service:${IMAGE_TAG} ./backend/product_service
 
-      # ---------- Docker Push ----------
       - name: Push Docker images
         run: |
           docker push $ACR/frontend:${IMAGE_TAG}
