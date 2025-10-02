@@ -25,7 +25,7 @@ jobs:
           node-version: '20'
 
       - name: Install & Test frontend
-        working-directory: ./frontend
+        working-directory: ./task10_2d/frontend
         run: |
           npm install
           npm test --if-present
@@ -37,7 +37,7 @@ jobs:
           node-version: '20'
 
       - name: Install & Test backend
-        working-directory: ./backend
+        working-directory: ./task10_2d/backend
         run: |
           npm install
           npm test --if-present
@@ -54,8 +54,8 @@ jobs:
       # ---------- Docker Build ----------
       - name: Build Docker images
         run: |
-          docker build -t $ACR/frontend:${IMAGE_TAG} ./frontend
-          docker build -t $ACR/backend:${IMAGE_TAG} ./backend
+          docker build -t $ACR/frontend:${IMAGE_TAG} ./task10_2d/frontend
+          docker build -t $ACR/backend:${IMAGE_TAG} ./task10_2d/backend
 
       # ---------- Docker Push ----------
       - name: Push Docker images
