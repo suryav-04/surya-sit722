@@ -1,102 +1,64 @@
-name: CI - Build and Push
+name: CI - Stage 1 (Testing Branch)
 
 on:
   push:
-    branches:
-      - testing
+    branches: [ "testing" ]
   pull_request:
-    branches:
-      - testing
+    branches: [ "testing" ]
 
 jobs:
   build_and_push:
     runs-on: ubuntu-latest
 
     steps:
-      # -------------------------
-      # Checkout repository
-      # -------------------------
+      # Checkout code
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # -------------------------
-      # Setup Node.js for frontend
-      # -------------------------
+      # ---------------------------
+      # FRONTEND
+      # ---------------------------
       - name: Set up Node.js for frontend
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
       - name: Install & Test frontend
-        working-directory: ./frontend
-        run: |
-          npm install
-          echo "✅ Frontend dependencies installed successfully"
+        run: echo "Skipping npm install for frontend (no package.json found, static frontend only)."
 
-      # -------------------------
-      # Setup Python for backend
-      # -------------------------
+      # ---------------------------
+      # BACKEND - Install Dependencies
+      # ---------------------------
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install dependencies for backend
         run: |
-          pip install --upgrade pip
-          pip install pytest httpx sqlalchemy psycopg2-binary fastapi uvicorn
+          python -m pip install --upgrade pip
+          pip install -r backend/customer_service/requirements.txt
+          pip install -r backend/order_service/requirements.txt
+          pip install -r backend/product_service/requirements.txt
 
-      # -------------------------
-      # Run backend tests
-      # -------------------------
+      # ---------------------------
+      # BACKEND - Run Tests
+      # ---------------------------
       - name: Run Customer Service tests
-        run: |
-          cd backend/customer_service
-          pip install -r requirements.txt
-          pytest -q --disable-warnings --maxfail=1
+        run: pytest backend/customer_service/tests --maxfail=1 --disable-warnings -q
 
       - name: Run Order Service tests
-        run: |
-          cd backend/order_service
-          pip install -r requirements.txt
-          pytest -q --disable-warnings --maxfail=1
+        run: pytest backend/order_service/tests --maxfail=1 --disable-warnings -q
 
       - name: Run Product Service tests
-        run: |
-          cd backend/product_service
-          pip install -r requirements.txt
-          pytest -q --disable-warnings --maxfail=1
+        run: pytest backend/product_service/tests --maxfail=1 --disable-warnings -q
 
-      # -------------------------
-      # Azure Login
-      # -------------------------
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      # -------------------------
-      # ACR Login
-      # -------------------------
-      - name: ACR Login
-        run: az acr login --name ${{ secrets.ACR_NAME }}
-
-      # -------------------------
-      # Build Docker Images
-      # -------------------------
+      # ---------------------------
+      # (OPTIONAL) DOCKER BUILD STAGE
+      # ---------------------------
       - name: Build Docker images
         run: |
-          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/frontend:latest ./frontend
-          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/customer_service:latest ./backend/customer_service
-          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/order_service:latest ./backend/order_service
-          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/product_service:latest ./backend/product_service
-
-      # -------------------------
-      # Push Docker Images
-      # -------------------------
-      - name: Push Docker images
-        run: |
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/frontend:latest
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/customer_service:latest
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/order_service:latest
-          docker push ${{ secrets.ACR_NAME }}.azurecr.io/product_service:latest
+          docker build -t test-frontend ./frontend
+          docker build -t test-customer-service ./backend/customer_service
+          docker build -t test-order-service ./backend/order_service
+          docker build -t test-product-service ./backend/product_service
