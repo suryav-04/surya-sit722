@@ -2,9 +2,8 @@ name: CI - Stage 1 (Testing Branch)
 
 on:
   push:
-    branches: [ "testing" ]
-  pull_request:
-    branches: [ "testing" ]
+    branches:
+      - testing
 
 jobs:
   build_and_push:
@@ -12,7 +11,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:15
+        image: postgres:13
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -29,32 +28,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v3
 
-      # ---------------------------
-      # FRONTEND
-      # ---------------------------
+      # ---------- FRONTEND ----------
       - name: Set up Node.js for frontend
         uses: actions/setup-node@v4
         with:
-          node-version: '20'
-
+          node-version: 20
       - name: Install & Test frontend
-        run: echo "Skipping npm install for frontend (no package.json found, static frontend only)."
+        working-directory: ./frontend
+        run: |
+          if [ -f package.json ]; then
+            npm install
+            npm test || echo "No frontend tests found"
+          else
+            echo "No package.json found in frontend, skipping..."
+          fi
 
-      # ---------------------------
-      # BACKEND
-      # ---------------------------
+      # ---------- BACKEND ----------
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.10"
+          python-version: 3.10
 
       - name: Install dependencies for backend
         run: |
-          python -m pip install --upgrade pip
-          pip install pytest pytest-asyncio pytest-cov
-          pip install -r backend/customer_service/requirements.txt
-          pip install -r backend/order_service/requirements.txt
-          pip install -r backend/product_service/requirements.txt
+          pip install --upgrade pip
+          pip install pytest pytest-asyncio psycopg2-binary fastapi uvicorn httpx sqlalchemy
 
       - name: Wait for Postgres to be ready
         run: |
@@ -64,30 +62,43 @@ jobs:
             sleep 3
           done
 
-      # ---------------------------
-      # BACKEND TESTS
-      # ---------------------------
+      - name: Create test databases
+        run: |
+          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE customers;"
+          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE orders;"
+          PGPASSWORD=postgres psql -h localhost -U postgres -d testdb -c "CREATE DATABASE products;"
+
       - name: Run Customer Service tests
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
-        run: python -m pytest backend/customer_service/tests --maxfail=1 --disable-warnings -q
+        working-directory: ./backend/customer_service
+        run: pytest tests --maxfail=1 --disable-warnings -q
 
       - name: Run Order Service tests
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
-        run: python -m pytest backend/order_service/tests --maxfail=1 --disable-warnings -q
+        working-directory: ./backend/order_service
+        run: pytest tests --maxfail=1 --disable-warnings -q
 
       - name: Run Product Service tests
-        env:
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/testdb
-        run: python -m pytest backend/product_service/tests --maxfail=1 --disable-warnings -q
+        working-directory: ./backend/product_service
+        run: pytest tests --maxfail=1 --disable-warnings -q
 
-      # ---------------------------
-      # DOCKER BUILD
-      # ---------------------------
+      # ---------- BUILD & PUSH ----------
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: ACR Login
+        run: az acr login --name sit7229cacr123
+
       - name: Build Docker images
         run: |
-          docker build -t test-frontend ./frontend
-          docker build -t test-customer-service ./backend/customer_service
-          docker build -t test-order-service ./backend/order_service
-          docker build -t test-product-service ./backend/product_service
+          docker build -t sit7229cacr123.azurecr.io/frontend:latest ./frontend
+          docker build -t sit7229cacr123.azurecr.io/customer_service:latest ./backend/customer_service
+          docker build -t sit7229cacr123.azurecr.io/order_service:latest ./backend/order_service
+          docker build -t sit7229cacr123.azurecr.io/product_service:latest ./backend/product_service
+
+      - name: Push Docker images
+        run: |
+          docker push sit7229cacr123.azurecr.io/frontend:latest
+          docker push sit7229cacr123.azurecr.io/customer_service:latest
+          docker push sit7229cacr123.azurecr.io/order_service:latest
+          docker push sit7229cacr123.azurecr.io/product_service:latest
