@@ -27,7 +27,7 @@ jobs:
       - name: Install & Test frontend
         working-directory: ./frontend
         run: |
-          npm ci
+          npm install
           npm test --if-present
 
       # ---------- Backend ----------
@@ -39,7 +39,7 @@ jobs:
       - name: Install & Test backend
         working-directory: ./backend
         run: |
-          npm ci
+          npm install
           npm test --if-present
 
       # ---------- Azure & ACR ----------
