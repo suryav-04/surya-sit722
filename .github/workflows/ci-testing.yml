@@ -8,17 +8,33 @@ on:
 env:
   ACR: ${{ secrets.ACR_LOGIN_SERVER }}
   IMAGE_TAG: ${{ github.sha }}
+  DATABASE_URL: postgresql://testuser:testpassword@localhost:5432/testdb
 
 jobs:
   build_and_push:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:14
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpassword
+          POSTGRES_DB: testdb
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U testuser"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
 
     steps:
       # Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------- Backend Tests (Python) ----------
+      # ---------- Backend Tests (Python + pytest) ----------
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -29,13 +45,15 @@ jobs:
           pip install -r backend/customer_service/requirements.txt
           pip install -r backend/order_service/requirements.txt
           pip install -r backend/product_service/requirements.txt
-          pip install pytest
+          pip install pytest psycopg2-binary
 
       - name: Run backend tests
+        env:
+          DATABASE_URL: ${{ env.DATABASE_URL }}
         run: |
-          pytest backend/customer_service/tests
-          pytest backend/order_service/tests
-          pytest backend/product_service/tests
+          pytest backend/customer_service/tests --maxfail=1 --disable-warnings -q
+          pytest backend/order_service/tests --maxfail=1 --disable-warnings -q
+          pytest backend/product_service/tests --maxfail=1 --disable-warnings -q
 
       # ---------- Azure & ACR ----------
       - name: Azure Login
