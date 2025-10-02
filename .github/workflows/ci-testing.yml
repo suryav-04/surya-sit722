@@ -18,29 +18,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ---------- Frontend ----------
-      - name: Set up Node.js for frontend
-        uses: actions/setup-node@v4
+      # ---------- Backend Tests (Python) ----------
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
-          node-version: '20'
+          python-version: '3.10'
 
-      - name: Install & Test frontend
-        working-directory: ./task10_2d/frontend
+      - name: Install dependencies for backend
         run: |
-          npm install
-          npm test --if-present
+          pip install -r backend/customer_service/requirements.txt
+          pip install -r backend/order_service/requirements.txt
+          pip install -r backend/product_service/requirements.txt
+          pip install pytest
 
-      # ---------- Backend ----------
-      - name: Set up Node.js for backend
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install & Test backend
-        working-directory: ./task10_2d/backend
+      - name: Run backend tests
         run: |
-          npm install
-          npm test --if-present
+          pytest backend/customer_service/tests
+          pytest backend/order_service/tests
+          pytest backend/product_service/tests
 
       # ---------- Azure & ACR ----------
       - name: Azure Login
@@ -54,11 +49,15 @@ jobs:
       # ---------- Docker Build ----------
       - name: Build Docker images
         run: |
-          docker build -t $ACR/frontend:${IMAGE_TAG} ./task10_2d/frontend
-          docker build -t $ACR/backend:${IMAGE_TAG} ./task10_2d/backend
+          docker build -t $ACR/frontend:${IMAGE_TAG} ./frontend
+          docker build -t $ACR/customer_service:${IMAGE_TAG} ./backend/customer_service
+          docker build -t $ACR/order_service:${IMAGE_TAG} ./backend/order_service
+          docker build -t $ACR/product_service:${IMAGE_TAG} ./backend/product_service
 
       # ---------- Docker Push ----------
       - name: Push Docker images
         run: |
           docker push $ACR/frontend:${IMAGE_TAG}
-          docker push $ACR/backend:${IMAGE_TAG}
+          docker push $ACR/customer_service:${IMAGE_TAG}
+          docker push $ACR/order_service:${IMAGE_TAG}
+          docker push $ACR/product_service:${IMAGE_TAG}
