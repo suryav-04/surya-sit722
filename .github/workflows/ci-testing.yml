@@ -3,7 +3,7 @@ name: CI - Stage 1 (Testing Branch)
 on:
   push:
     branches:
-      - testing
+      - testing   # Trigger only on testing branch
 
 env:
   ACR: ${{ secrets.ACR_LOGIN_SERVER }}
@@ -14,34 +14,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Checkout code
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Frontend Tests
+      # ---------- Frontend ----------
       - name: Set up Node.js for frontend
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install & Test frontend
-        working-directory: ./task10_2d/frontend
+        working-directory: ./frontend
         run: |
           npm ci
           npm test --if-present
 
-      # Backend Tests
+      # ---------- Backend ----------
       - name: Set up Node.js for backend
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
       - name: Install & Test backend
-        working-directory: ./task10_2d/backend
+        working-directory: ./backend
         run: |
           npm ci
           npm test --if-present
 
-      # Login to Azure
+      # ---------- Azure & ACR ----------
       - name: Azure Login
         uses: azure/login@v2
         with:
@@ -50,13 +51,13 @@ jobs:
       - name: ACR Login
         run: az acr login --name ${{ env.ACR }}
 
-      # Build Docker images
+      # ---------- Docker Build ----------
       - name: Build Docker images
         run: |
-          docker build -t $ACR/frontend:${IMAGE_TAG} ./task10_2d/frontend
-          docker build -t $ACR/backend:${IMAGE_TAG} ./task10_2d/backend
+          docker build -t $ACR/frontend:${IMAGE_TAG} ./frontend
+          docker build -t $ACR/backend:${IMAGE_TAG} ./backend
 
-      # Push Docker images
+      # ---------- Docker Push ----------
       - name: Push Docker images
         run: |
           docker push $ACR/frontend:${IMAGE_TAG}
