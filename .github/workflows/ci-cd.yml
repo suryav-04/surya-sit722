@@ -1,45 +1,38 @@
-name: CI/CD Pipeline
+deploy_staging:
+  name: Deploy to AKS Staging
+  runs-on: ubuntu-latest
+  needs: [build_and_push]   # only run if images built & pushed
 
-on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+  steps:
+    - name: Checkout repo
+      uses: actions/checkout@v4
 
-jobs:
-  build-and-push:
-    runs-on: ubuntu-latest
+    - name: Azure Login
+      uses: azure/login@v1
+      with:
+        client-id: ${{ secrets.AZURE_CLIENT_ID }}
+        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-    steps:
-      # Checkout repository
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Set AKS context
+      uses: azure/aks-set-context@v4
+      with:
+        resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+        cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
+        use-kubelogin: true
 
-      # Log in to Azure Container Registry
-      - name: Log in to Azure Container Registry
-        run: |
-          echo ${{ secrets.ACR_PASSWORD }} | docker login sit72210dacr123.azurecr.io -u ${{ secrets.ACR_USERNAME }} --password-stdin
+    - name: Create staging namespace
+      run: |
+        kubectl get ns staging || kubectl create ns staging
 
-      # ===================== BACKEND SERVICES =====================
-      - name: Build & Push Customer Service
-        run: |
-          docker build -t sit72210dacr123.azurecr.io/customer_service:latest ./backend/customer_service
-          docker push sit72210dacr123.azurecr.io/customer_service:latest
+    - name: Deploy manifests
+      run: |
+        kubectl apply -f k8s/ -n staging
+        kubectl rollout status deployment/frontend -n staging --timeout=180s
+        kubectl rollout status deployment/customer-service -n staging --timeout=180s
+        kubectl rollout status deployment/order-service -n staging --timeout=180s
+        kubectl rollout status deployment/product-service -n staging --timeout=180s
 
-      - name: Build & Push Order Service
-        run: |
-          docker build -t sit72210dacr123.azurecr.io/order_service:latest ./backend/order_service
-          docker push sit72210dacr123.azurecr.io/order_service:latest
-
-      - name: Build & Push Product Service
-        run: |
-          docker build -t sit72210dacr123.azurecr.io/product_service:latest ./backend/product_service
-          docker push sit72210dacr123.azurecr.io/product_service:latest
-
-      # ===================== FRONTEND =====================
-      - name: Build & Push Frontend
-        run: |
-          docker build -t sit72210dacr123.azurecr.io/frontend:latest ./frontend
-          docker push sit72210dacr123.azurecr.io/frontend:latest
+    - name: Show frontend external IP
+      run: |
+        kubectl get svc frontend -n staging -o wide
