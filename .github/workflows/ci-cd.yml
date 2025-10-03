@@ -1,77 +1,45 @@
-name: build_and_deploy_to_staging
+name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ "testing" ]
-  workflow_dispatch:
-
-env:
-  STAGING_NAMESPACE: staging
-  ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
-  AKS_RG: ${{ secrets.AKS_RESOURCE_GROUP }}
-  AKS_NAME: ${{ secrets.AKS_CLUSTER_NAME }}
-
-permissions:
-  contents: read
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 jobs:
-  deploy:
-    name: Deploy to AKS (staging)
+  build-and-push:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      # Checkout repository
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-      # Login to Azure
-      - name: Azure Login
-        uses: azure/login@v1
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-          enable-AzPSSession: false
-
-      # Get kubectl context for your AKS
-      - name: Set AKS context
-        uses: azure/aks-set-context@v4
-        with:
-          resource-group: ${{ env.AKS_RG }}
-          cluster-name:  ${{ env.AKS_NAME }}
-          use-kubelogin: true
-
-      # Create (or keep) the staging namespace
-      - name: Create staging namespace (idempotent)
+      # Log in to Azure Container Registry
+      - name: Log in to Azure Container Registry
         run: |
-          kubectl get ns $STAGING_NAMESPACE >/dev/null 2>&1 || kubectl create ns $STAGING_NAMESPACE
-          kubectl label ns $STAGING_NAMESPACE app=sit722 --overwrite
+          echo ${{ secrets.ACR_PASSWORD }} | docker login sit72210dacr123.azurecr.io -u ${{ secrets.ACR_USERNAME }} --password-stdin
 
-      # Deploy manifests
-      - name: kubectl apply
+      # ===================== BACKEND SERVICES =====================
+      - name: Build & Push Customer Service
         run: |
-          kubectl apply -f k8s/ -n $STAGING_NAMESPACE
-          echo "Current objects:"
-          kubectl get deploy,po,svc -n $STAGING_NAMESPACE -o wide
+          docker build -t sit72210dacr123.azurecr.io/customer_service:latest ./backend/customer_service
+          docker push sit72210dacr123.azurecr.io/customer_service:latest
 
-      # Wait for deployments to become ready (frontend + the 3 services)
-      - name: Wait for rollout
+      - name: Build & Push Order Service
         run: |
-          set -e
-          for d in frontend customer-service order-service product-service; do
-            echo "Waiting for deployment/$d..."
-            kubectl rollout status deployment/$d -n $STAGING_NAMESPACE --timeout=180s
-          done
+          docker build -t sit72210dacr123.azurecr.io/order_service:latest ./backend/order_service
+          docker push sit72210dacr123.azurecr.io/order_service:latest
 
-      # Show external IP of frontend (if/when assigned)
-      - name: Show frontend service external IP
+      - name: Build & Push Product Service
         run: |
-          kubectl get svc frontend -n $STAGING_NAMESPACE -o wide
-          echo "If EXTERNAL-IP is <pending>, wait ~1-2 minutes and re-check: kubectl get svc frontend -n $STAGING_NAMESPACE"
+          docker build -t sit72210dacr123.azurecr.io/product_service:latest ./backend/product_service
+          docker push sit72210dacr123.azurecr.io/product_service:latest
 
-      # Useful diagnostics if anything fails
-      - name: Describe pods on failure
-        if: failure()
+      # ===================== FRONTEND =====================
+      - name: Build & Push Frontend
         run: |
-          kubectl get all -n $STAGING_NAMESPACE -o wide || true
-          kubectl describe pods -n $STAGING_NAMESPACE || true
-          kubectl get events -n $STAGING_NAMESPACE --sort-by=.lastTimestamp | tail -n 100 || true
+          docker build -t sit72210dacr123.azurecr.io/frontend:latest ./frontend
+          docker push sit72210dacr123.azurecr.io/frontend:latest
