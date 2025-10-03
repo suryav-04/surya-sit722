@@ -1,38 +1,104 @@
-deploy_staging:
-  name: Deploy to AKS Staging
-  runs-on: ubuntu-latest
-  needs: [build_and_push]   # only run if images built & pushed
+name: CI-CD Pipeline
 
-  steps:
-    - name: Checkout repo
-      uses: actions/checkout@v4
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
-    - name: Azure Login
-      uses: azure/login@v1
-      with:
-        client-id: ${{ secrets.AZURE_CLIENT_ID }}
-        tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-        subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+jobs:
+  # ----------------------
+  # Stage 1: Build & Push
+  # ----------------------
+  build_and_push:
+    name: Build & Push Images to ACR
+    runs-on: ubuntu-latest
 
-    - name: Set AKS context
-      uses: azure/aks-set-context@v4
-      with:
-        resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
-        cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
-        use-kubelogin: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-    - name: Create staging namespace
-      run: |
-        kubectl get ns staging || kubectl create ns staging
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-    - name: Deploy manifests
-      run: |
-        kubectl apply -f k8s/ -n staging
-        kubectl rollout status deployment/frontend -n staging --timeout=180s
-        kubectl rollout status deployment/customer-service -n staging --timeout=180s
-        kubectl rollout status deployment/order-service -n staging --timeout=180s
-        kubectl rollout status deployment/product-service -n staging --timeout=180s
+      - name: ACR Login
+        run: az acr login --name ${{ secrets.ACR_NAME }}
 
-    - name: Show frontend external IP
-      run: |
-        kubectl get svc frontend -n staging -o wide
+      # Customer Service
+      - name: Build & Push Customer Service
+        run: |
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/customer_service:latest \
+            -f ./backend/customer_service/Dockerfile ./backend/customer_service
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/customer_service:latest
+
+      # Order Service
+      - name: Build & Push Order Service
+        run: |
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/order_service:latest \
+            -f ./backend/order_service/Dockerfile ./backend/order_service
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/order_service:latest
+
+      # Product Service
+      - name: Build & Push Product Service
+        run: |
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/product_service:latest \
+            -f ./backend/product_service/Dockerfile ./backend/product_service
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/product_service:latest
+
+      # Frontend
+      - name: Build & Push Frontend
+        run: |
+          docker build -t ${{ secrets.ACR_NAME }}.azurecr.io/frontend:latest \
+            -f ./frontend/Dockerfile ./frontend
+          docker push ${{ secrets.ACR_NAME }}.azurecr.io/frontend:latest
+
+  # ----------------------
+  # Stage 2: Deploy Staging
+  # ----------------------
+  deploy_staging:
+    name: Deploy to AKS Staging
+    runs-on: ubuntu-latest
+    needs: build_and_push
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Azure Login
+        uses: azure/login@v1
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set AKS context
+        uses: azure/aks-set-context@v4
+        with:
+          resource-group: ${{ secrets.AKS_RESOURCE_GROUP }}
+          cluster-name: ${{ secrets.AKS_CLUSTER_NAME }}
+          use-kubelogin: true
+
+      - name: Create staging namespace
+        run: |
+          kubectl get ns staging || kubectl create ns staging
+
+      - name: Deploy all manifests
+        run: |
+          kubectl apply -f k8s/ -n staging
+          kubectl rollout status deployment/frontend -n staging --timeout=180s
+          kubectl rollout status deployment/customer-service -n staging --timeout=180s
+          kubectl rollout status deployment/order-service -n staging --timeout=180s
+          kubectl rollout status deployment/product-service -n staging --timeout=180s
+
+      - name: Show frontend external IP
+        run: kubectl get svc frontend -n staging -o wide
+
+      - name: Smoke test frontend
+        run: |
+          sleep 30
+          FRONTEND_IP=$(kubectl get svc frontend -n staging -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+          curl -s --fail http://$FRONTEND_IP || exit 1
